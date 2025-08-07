@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestor de Alquileres Prototipo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .modal-backdrop { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.6); z-index: 40; }
+        .modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 50; }
+        .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; }
+        .loader { border: 4px solid #f3f3f3; border-top: 4px solid #6366f1; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        /* Custom scrollbar for tabs */
+        #tab-bar::-webkit-scrollbar { height: 4px; }
+        #tab-bar::-webkit-scrollbar-track { background: #1f2937; }
+        #tab-bar::-webkit-scrollbar-thumb { background: #4f46e5; border-radius: 2px; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200">
+
+    <div id="loading-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-[100]">
+        <div class="loader"></div>
+    </div>
+
+    <div class="flex h-screen">
+        <!-- Sidebar -->
+        <aside class="sidebar bg-gray-800 w-64 flex-shrink-0 flex flex-col">
+            <div class="h-16 flex items-center justify-center text-2xl font-bold text-white border-b border-gray-700">
+                <i class="fas fa-video mr-3"></i>RentalSys
+            </div>
+            <nav class="flex-1 px-4 py-6 space-y-2">
+                <a href="#" id="nav-projects" class="flex items-center px-4 py-2 text-lg font-medium rounded-md">
+                    <i class="fas fa-tasks w-6 mr-3"></i> Proyectos
+                </a>
+                <a href="#" id="nav-inventory" class="flex items-center px-4 py-2 text-lg font-medium rounded-md">
+                    <i class="fas fa-boxes-stacked w-6 mr-3"></i> Inventario
+                </a>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content flex-1 flex flex-col overflow-hidden">
+            <!-- Header -->
+            <header class="bg-gray-800 border-b border-gray-700">
+                <div class="h-16 flex items-center justify-between px-6">
+                    <h1 id="main-title" class="text-xl font-semibold">Proyectos</h1>
+                    <div id="header-buttons"></div>
+                </div>
+            </header>
+            
+            <!-- Tab Bar -->
+            <div id="tab-bar" class="flex-shrink-0 bg-gray-800 border-b border-gray-700 flex items-center overflow-x-auto">
+                <!-- Tabs will be rendered here -->
+            </div>
+
+            <!-- Content Area -->
+            <div id="content-area" class="flex-1 p-6 overflow-y-auto">
+                <!-- Views will be rendered here -->
+            </div>
+        </main>
+    </div>
+
+    <!-- Modals -->
+    <div id="modal-backdrop" class="modal-backdrop"></div>
+    <div id="add-project-modal" class="modal bg-gray-800 rounded-lg shadow-xl w-full max-w-lg"></div>
+    <div id="add-inventory-modal" class="modal bg-gray-800 rounded-lg shadow-xl w-full max-w-lg"></div>
+    <div id="confirm-modal" class="modal bg-gray-800 rounded-lg shadow-xl w-full max-w-md"></div>
+    <div id="assign-serial-modal" class="modal bg-gray-800 rounded-lg shadow-xl w-full max-w-md"></div>
+    
+    <!-- Hidden file input for CSV import -->
+    <input type="file" id="csv-file-input" class="hidden" accept=".csv">
+
+<script type="module">
+    // --- FIREBASE IMPORTS ---
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, collection, doc, addDoc, getDocs, deleteDoc, writeBatch, onSnapshot, query, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+    // --- FIREBASE CONFIG & INITIALIZATION ---
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    const firebaseConfig = {
+  apiKey: "AIzaSyCqFp_LNkm3rqAZqJ8gZ3kJVXIz-Di_KZ4",
+  authDomain: "cemapp-25cf9.firebaseapp.com",
+  projectId: "cemapp-25cf9",
+  storageBucket: "cemapp-25cf9.firebasestorage.app",
+  messagingSenderId: "739296372240",
+  appId: "1:739296372240:web:21061680a042c683678c95",
+  measurementId: "G-04QWS9EKL6"
+};
+   
+    let db, auth;
+    let projectsCollection, inventoryCollection;
+    let unsubscribeProjects, unsubscribeInventory;
+
+    // --- GLOBAL STATE ---
+    const state = {
+        projects: [],
+        inventory: [],
+        openTabs: [
+            { id: 'projects', type: 'projects', title: 'Proyectos' },
+            { id: 'inventory', type: 'inventory', title: 'Inventario' }
+        ],
+        activeTabId: 'projects',
+        projectSearchTerm: '',
+        projectSortOrder: 'date_desc',
+        projectDateFilterStart: '',
+        projectDateFilterEnd: '',
+        selectedLineItems: {}, // UI state for checkboxes, keyed by projectId
+        isAuthReady: false,
+    };
+
+    // --- DOM ELEMENTS ---
+    const contentArea = document.getElementById('content-area');
+    const mainTitle = document.getElementById('main-title');
+    const headerButtons = document.getElementById('header-buttons');
+    const loadingOverlay = document.getElementById('loading-overlay');
+    const tabBar = document.getElementById('tab-bar');
+
+    // --- INITIALIZATION ---
+    async function initializeAppAndAuth() {
+        try {
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+
+            onAuthStateChanged(auth, user => {
+                if (user) {
+                    state.isAuthReady = true;
+                    setupFirestoreListeners();
+                }
+            });
+
+            if (initialAuthToken) {
+                await signInWithCustomToken(auth, initialAuthToken);
+            } else {
+                await signInAnonymously(auth);
+            }
+        } catch (error) {
+            console.error("Firebase Initialization Error:", error);
+            loadingOverlay.innerHTML = <div class="text-red-500">Error de Conexión</div>;
+        }
+    }
+
+    function setupFirestoreListeners() {
+        if (!state.isAuthReady) return;
+        
+        projectsCollection = collection(db, artifacts/${appId}/public/data/projects);
+        inventoryCollection = collection(db, artifacts/${appId}/public/data/inventory);
+
+        if (unsubscribeProjects) unsubscribeProjects();
+        unsubscribeProjects = onSnapshot(query(projectsCollection), (snapshot) => {
+            state.projects = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            render();
+        }, (error) => console.error("Error listening to projects:", error));
+
+        if (unsubscribeInventory) unsubscribeInventory();
+        unsubscribeInventory = onSnapshot(query(inventoryCollection), (snapshot) => {
+            state.inventory = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            render();
+        }, (error) => console.error("Error listening to inventory:", error));
+        
+        loadingOverlay.style.display = 'none';
+    }
+
+    // --- UTILITY & HELPER FUNCTIONS ---
+    const getStatusColor = (status) => ({'Confirmado':'bg-green-500','En Proceso':'bg-yellow-500','Pendiente':'bg-blue-500','Finalizado':'bg-gray-500'})[status] || 'bg-gray-400';
+    const formatCurrency = (amount) => new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(amount);
+
+    function calculateProjectValue(project) {
+        if (!project.equipment) return 0;
+        return (project.equipment || []).reduce((total, item) => {
+            return total + (item.pricePerDay * item.quantity * item.jornadas);
+        }, 0);
+    }
+
+    function getEquipmentAvailability(equipmentId, checkStartDate, checkEndDate, excludeProjectId) {
+        const inventoryItem = state.inventory.find(item => item.id === equipmentId);
+        if (!inventoryItem) return 0;
+
+        if (!checkStartDate || !checkEndDate) return inventoryItem.totalQuantity;
+
+        let assignedQuantity = 0;
+        const checkStart = new Date(checkStartDate);
+        const checkEnd = new Date(checkEndDate);
+
+        state.projects.forEach(project => {
+            if (project.id === excludeProjectId || !project.pickupDateTime || !project.returnDateTime) return;
+            const projectStart = new Date(project.pickupDateTime);
+            const projectEnd = new Date(project.returnDateTime);
+
+            if (checkStart < projectEnd && checkEnd > projectStart) {
+                (project.equipment || []).forEach(item => {
+                    if (item.inventoryId === equipmentId) {
+                         assignedQuantity += (item.quantity - (item.subrentedInfo?.quantity || 0));
+                    }
+                });
+            }
+        });
+        return inventoryItem.totalQuantity - assignedQuantity;
+    }
+    
+    function getProjectDurationInDays(project) {
+        if (!project.startDate || !project.endDate) return 1;
+        const startDate = new Date(project.startDate);
+        const endDate = new Date(project.endDate);
+        if (isNaN(startDate) || isNaN(endDate) || startDate > endDate) return 1;
+        return Math.max(1, Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1);
+    }
+
+    // --- RENDER FUNCTIONS ---
+    function render() {
+        if (!state.isAuthReady) return;
+        
+        const activeTab = state.openTabs.find(t => t.id === state.activeTabId);
+        if (!activeTab) {
+            state.activeTabId = 'projects';
+        }
+
+        renderTabBar();
+        renderHeaderButtons();
+        
+        const currentActiveTab = state.openTabs.find(t => t.id === state.activeTabId);
+        mainTitle.innerText = currentActiveTab.title;
+        
+        switch (currentActiveTab.type) {
+            case 'projects':
+                renderProjectsTable();
+                break;
+            case 'inventory':
+                renderInventory();
+                break;
+            case 'project-detail':
+                renderProjectDetail(currentActiveTab.projectId);
+                break;
+        }
+    }
+
+    function renderTabBar() {
+        tabBar.innerHTML = '';
+        state.openTabs.forEach((tab, index) => {
+            const isActive = tab.id === state.activeTabId;
+            const tabEl = document.createElement('div');
+            tabEl.className = flex items-center px-4 py-2 cursor-pointer border-b-2 whitespace-nowrap ${isActive ? 'bg-gray-900 border-indigo-500 text-white' : 'border-transparent text-gray-400 hover:bg-gray-700'};
+            tabEl.dataset.tabId = tab.id;
+            
+            let iconClass = 'fa-tasks';
+            if (tab.type === 'inventory') iconClass = 'fa-boxes-stacked';
+            if (tab.type === 'project-detail') iconClass = 'fa-folder';
+
+            tabEl.innerHTML = <i class="fas ${iconClass} mr-2"></i><span>${tab.title}</span>;
+            
+            if (tab.type === 'project-detail') {
+                const closeBtn = document.createElement('button');
+                closeBtn.className = 'ml-3 text-gray-500 hover:text-white';
+                closeBtn.innerHTML = '<i class="fas fa-times fa-sm"></i>';
+                closeBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    closeTab(tab.id, index);
+                });
+                tabEl.appendChild(closeBtn);
+            }
+
+            tabEl.addEventListener('click', (e) => {
+                state.activeTabId = e.currentTarget.dataset.tabId;
+                render();
+            });
+
+            tabBar.appendChild(tabEl);
+        });
+    }
+    
+    function renderHeaderButtons() {
+        const activeTab = state.openTabs.find(t => t.id === state.activeTabId);
+        if (!activeTab) return;
+
+        if (activeTab.type === 'projects') {
+            headerButtons.innerHTML = <button id="add-project-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg flex items-center"><i class="fas fa-plus mr-2"></i> Añadir Proyecto</button>;
+            headerButtons.querySelector('#add-project-btn').addEventListener('click', showAddProjectModal);
+        } else if (activeTab.type === 'inventory') {
+            headerButtons.innerHTML = <div class="flex space-x-2 md:space-x-4">
+                <button id="add-inventory-item-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg flex items-center"><i class="fas fa-plus mr-2"></i> Añadir Equipo</button>
+                <button id="import-csv-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg flex items-center"><i class="fas fa-file-import mr-2"></i> Importar</button>
+                <button id="clear-inventory-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg flex items-center"><i class="fas fa-trash-alt mr-2"></i> Vaciar</button>
+            </div>;
+            headerButtons.querySelector('#add-inventory-item-btn').addEventListener('click', showAddInventoryItemModal);
+            headerButtons.querySelector('#import-csv-btn').addEventListener('click', () => document.getElementById('csv-file-input').click());
+            headerButtons.querySelector('#clear-inventory-btn').addEventListener('click', handleClearInventory);
+        } else {
+            headerButtons.innerHTML = '';
+        }
+    }
+
+    function renderProjectsTable() {
+        const searchTerm = state.projectSearchTerm.toLowerCase();
+        let filteredProjects = state.projects.filter(p => 
+            (p.name?.toLowerCase() || '').includes(searchTerm) || 
+            (p.client?.toLowerCase() || '').includes(searchTerm)
+        );
+        if (state.projectDateFilterStart && state.projectDateFilterEnd) {
+            const filterStart = new Date(state.projectDateFilterStart);
+            const filterEnd = new Date(state.projectDateFilterEnd);
+            filteredProjects = filteredProjects.filter(p => {
+                if (!p.startDate || !p.endDate) return false;
+                const projectStart = new Date(p.startDate);
+                const projectEnd = new Date(p.endDate);
+                return projectStart <= filterEnd && projectEnd >= filterStart;
+            });
+        }
+        filteredProjects.sort((a, b) => {
+            switch (state.projectSortOrder) {
+                case 'date_asc': return new Date(a.startDate) - new Date(b.startDate);
+                case 'name_asc': return (a.name || '').localeCompare(b.name || '');
+                case 'client_asc': return (a.client || '').localeCompare(b.client || '');
+                default: return new Date(b.startDate) - new Date(a.startDate);
+            }
+        });
+
+        let controlsHtml = 
+            <div class="bg-gray-800 p-4 rounded-lg mb-4">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="md:col-span-1"><div class="relative"><span class="absolute inset-y-0 left-0 flex items-center pl-3"><i class="fas fa-search text-gray-500"></i></span><input type="text" id="project-search-input" placeholder="Buscar por nombre o cliente..." class="w-full bg-gray-700 border border-gray-600 rounded-md py-2 pl-10 pr-4 text-white focus:ring-indigo-500 focus:border-indigo-500" value="${state.projectSearchTerm}"></div></div>
+                    <div class="md:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <input type="date" id="project-date-start-input" title="Fecha de inicio del filtro" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 text-gray-400" value="${state.projectDateFilterStart}">
+                        <input type="date" id="project-date-end-input" title="Fecha de fin del filtro" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 text-gray-400" value="${state.projectDateFilterEnd}">
+                        <select id="project-sort-select" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 text-white">
+                            <option value="date_desc" ${state.projectSortOrder === 'date_desc' ? 'selected' : ''}>Más Recientes</option>
+                            <option value="date_asc" ${state.projectSortOrder === 'date_asc' ? 'selected' : ''}>Más Antiguos</option>
+                            <option value="name_asc" ${state.projectSortOrder === 'name_asc' ? 'selected' : ''}>Nombre (A-Z)</option>
+                            <option value="client_asc" ${state.projectSortOrder === 'client_asc' ? 'selected' : ''}>Cliente (A-Z)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>;
+        let tableHtml = <div class="bg-gray-800 rounded-lg shadow"><table class="w-full text-left">
+            <thead class="bg-gray-700 text-gray-400 uppercase text-sm"><tr><th class="p-4"></th><th class="p-4">Nombre</th><th class="p-4">Cliente</th><th class="p-4">Fechas de Producción</th><th class="p-4">Estado</th><th class="p-4">Valor</th></tr></thead>
+            <tbody class="divide-y divide-gray-700">;
+        if (filteredProjects.length === 0) {
+            tableHtml += <tr><td colspan="6" class="text-center p-8 text-gray-500">No se encontraron proyectos con los filtros actuales.</td></tr>;
+        } else {
+            filteredProjects.forEach(p => {
+                tableHtml += <tr class="hover:bg-gray-700 cursor-pointer project-row" data-project-id="${p.id}" data-project-name="${p.name}"><td class="p-4"><span class="status-dot ${getStatusColor(p.status)}"></span></td><td class="p-4 font-medium text-white">${p.name}</td><td class="p-4">${p.client}</td><td class="p-4">${p.startDate || 'N/A'} al ${p.endDate || 'N/A'}</td><td class="p-4"><span class="px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(p.status)} text-white">${p.status}</span></td><td class="p-4 font-medium text-white">${formatCurrency(calculateProjectValue(p))}</td></tr>;
+            });
+        }
+        tableHtml += </tbody></table></div>;
+        contentArea.innerHTML = controlsHtml + tableHtml;
+
+        contentArea.querySelector('#project-search-input').addEventListener('input', (e) => { state.projectSearchTerm = e.target.value; render(); });
+        contentArea.querySelector('#project-date-start-input').addEventListener('change', (e) => { state.projectDateFilterStart = e.target.value; render(); });
+        contentArea.querySelector('#project-date-end-input').addEventListener('change', (e) => { state.projectDateFilterEnd = e.target.value; render(); });
+        contentArea.querySelector('#project-sort-select').addEventListener('change', (e) => { state.projectSortOrder = e.target.value; render(); });
+
+        contentArea.querySelectorAll('.project-row').forEach(row => {
+            row.addEventListener('click', (e) => {
+                const projectId = e.currentTarget.dataset.projectId;
+                const projectName = e.currentTarget.dataset.projectName;
+                openProjectTab(projectId, projectName);
+            });
+        });
+    }
+
+    function renderInventory() {
+        let html = <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">;
+        if (state.inventory.length === 0) {
+            html = <div class="col-span-full text-center p-8 text-gray-500">El inventario está vacío. Añade un equipo o importa un archivo CSV para empezar.</div>;
+        } else {
+            state.inventory.forEach(item => {
+                const count = item.type === 'serie' ? (item.units?.length || 0) : item.totalQuantity;
+                const typeLabel = item.type === 'serie' ? 'Serializado' : 'Bulto';
+                html += <div class="bg-gray-800 rounded-lg shadow p-4 flex flex-col"><h3 class="text-lg font-bold text-white">${item.name}</h3><p class="text-sm text-gray-400">${item.category}</p><div class="mt-4 pt-4 border-t border-gray-700 flex-1 flex flex-col justify-end"><p class="text-sm">Precio/día: <span class="font-semibold text-white">${formatCurrency(item.pricePerDay)}</span></p><p class="text-sm">Cantidad: <span class="font-semibold text-white">${count} (${typeLabel})</span></p></div></div>;
+            });
+        }
+        html += </div>;
+        contentArea.innerHTML = html;
+    }
+
+    function renderProjectDetail(projectId) {
+        if (!state.selectedLineItems[projectId]) {
+            state.selectedLineItems[projectId] = new Set();
+        }
+        const currentSelection = state.selectedLineItems[projectId];
+        
+        const project = state.projects.find(p => p.id === projectId);
+        if (!project) {
+            contentArea.innerHTML = <p class="text-center text-gray-500">Proyecto no encontrado o eliminado.</p>;
+            return;
+        }
+        const value = calculateProjectValue(project);
+        let equipmentHtml = (project.equipment || []).map(eq => {
+            const isChecked = currentSelection.has(eq.lineItemId) ? 'checked' : '';
+            const subrentedInfo = eq.subrentedInfo;
+            const subrentedText = subrentedInfo ? <span class="text-xs text-amber-400 ml-1" title="Proveedor: ${subrentedInfo.provider}">(S: ${subrentedInfo.quantity})</span> : '';
+            return <tr class="hover:bg-gray-700">
+                <td class="p-2"><input type="checkbox" class="equipment-checkbox bg-gray-700 border-gray-600" data-line-id="${eq.lineItemId}" ${isChecked}></td>
+                <td class="p-2"><input type="text" value="${eq.name}" class="w-full bg-gray-700 border border-gray-600 rounded-md p-1 equipment-name-input" data-line-id="${eq.lineItemId}"></td>
+                <td class="p-2"><input type="text" value="${eq.category}" class="w-full bg-gray-700 border border-gray-600 rounded-md p-1 equipment-category-input" data-line-id="${eq.lineItemId}"></td>
+                <td class="p-2"><div class="flex items-center"><input type="number" min="1" value="${eq.quantity}" class="w-16 bg-gray-700 border border-gray-600 rounded-md p-1 text-center equipment-quantity-input" data-line-id="${eq.lineItemId}">${subrentedText}</div></td>
+                <td class="p-2"><input type="number" min="1" value="${eq.jornadas}" class="w-20 bg-gray-700 border border-gray-600 rounded-md p-1 text-center equipment-jornadas-input" data-line-id="${eq.lineItemId}"></td>
+                <td class="p-2"><input type="number" min="0" value="${eq.pricePerDay}" class="w-24 bg-gray-700 border border-gray-600 rounded-md p-1 text-center equipment-price-input" data-line-id="${eq.lineItemId}"></td>
+                <td class="p-2"><input type="text" value="${eq.notes || ''}" placeholder="Nro Serie..." class="w-full bg-gray-700 border border-gray-600 rounded-md p-1 equipment-notes-input" data-line-id="${eq.lineItemId}"></td>
+                <td class="p-2 font-medium text-white">${formatCurrency(eq.pricePerDay * eq.quantity * eq.jornadas)}</td>
+                <td class="p-2 text-right"><button class="text-red-500 hover:text-red-400 remove-equipment-btn" data-line-id="${eq.lineItemId}"><i class="fas fa-trash"></i></button></td>
+            </tr>;
+        }).join('');
+        
+        const categories = ['Todas', ...new Set(state.inventory.map(item => item.category))];
+        let categoryOptionsHtml = categories.map(cat => <option value="${cat}">${cat}</option>).join('');
+
+        contentArea.innerHTML = 
+            <div class="bg-gray-800 rounded-lg shadow p-6 mb-6">
+                <div class="flex flex-col md:flex-row justify-between items-start">
+                    <div class="w-full md:w-2/3"><h2 class="text-3xl font-bold text-white">${project.name}</h2><p class="text-lg text-gray-400">${project.client}</p><div class="mt-4 space-y-2">
+                        <div class="flex items-center space-x-2"><label class="w-32 text-right text-gray-400">Producción:</label><input type="date" id="project-start-date" value="${project.startDate || ''}" class="bg-gray-700 border border-gray-600 rounded-md p-2"><span class="text-gray-400">al</span><input type="date" id="project-end-date" value="${project.endDate || ''}" class="bg-gray-700 border border-gray-600 rounded-md p-2"></div>
+                        <div class="flex items-center space-x-2"><label class="w-32 text-right text-gray-400">Logística:</label><input type="datetime-local" id="project-pickup-datetime" value="${project.pickupDateTime || ''}" class="bg-gray-700 border border-gray-600 rounded-md p-2"><span class="text-gray-400">al</span><input type="datetime-local" id="project-return-datetime" value="${project.returnDateTime || ''}" class="bg-gray-700 border border-gray-600 rounded-md p-2"></div>
+                    </div></div>
+                    <div class="text-right mt-4 md:mt-0 w-full md:w-1/3"><select class="status-select bg-gray-700 border border-gray-600 rounded-md p-1 mb-2 w-full"><option value="Pendiente" ${project.status === 'Pendiente' ? 'selected' : ''}>Pendiente</option><option value="Confirmado" ${project.status === 'Confirmado' ? 'selected' : ''}>Confirmado</option><option value="En Proceso" ${project.status === 'En Proceso' ? 'selected' : ''}>En Proceso</option><option value="Finalizado" ${project.status === 'Finalizado' ? 'selected' : ''}>Finalizado</option></select><p class="text-3xl font-bold text-white mt-2">${formatCurrency(value)}</p></div>
+                </div>
+                 <div class="mt-6 flex space-x-4"><button id="export-csv-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg flex items-center"><i class="fas fa-file-csv mr-2"></i> Exportar a CSV</button><button id="delete-project-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg flex items-center"><i class="fas fa-trash mr-2"></i> Eliminar Proyecto</button></div>
+            </div>
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div class="lg:col-span-2"><div class="bg-gray-800 rounded-lg shadow">
+                    <div id="bulk-actions-bar" class="hidden p-2 bg-gray-700 flex items-center space-x-4"><span id="selection-count" class="font-bold"></span><input type="number" id="bulk-quantity" placeholder="Cant." class="w-20 bg-gray-800 p-1 rounded-md"><input type="number" id="bulk-jornadas" placeholder="Jornadas" class="w-20 bg-gray-800 p-1 rounded-md"><button id="bulk-apply-btn" class="bg-indigo-600 px-3 py-1 rounded-md text-sm">Aplicar</button></div>
+                    <table class="w-full text-left"><thead class="text-gray-400 uppercase text-sm"><tr><th class="p-2"><input type="checkbox" id="select-all-checkbox"></th><th class="p-2">Item</th><th class="p-2">Categoría</th><th class="p-2">Cant.</th><th class="p-2">Jornadas</th><th class="p-2">Precio/Día</th><th class="p-2">Nro Serie/Notas</th><th class="p-2">Subtotal</th><th></th></tr></thead><tbody class="divide-y divide-gray-700">${equipmentHtml}</tbody></table>
+                </div></div>
+                <div><div class="bg-gray-800 rounded-lg shadow p-4"><h3 class="text-xl font-semibold mb-4">Añadir Equipos</h3>
+                    <form id="add-equipment-form">
+                        <div class="mb-4"><label for="category-select" class="block text-sm font-medium text-gray-400">Filtrar por Categoría</label><select id="category-select" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 mt-1">${categoryOptionsHtml}</select></div>
+                        <div class="mb-4"><label for="equipment-select" class="block text-sm font-medium text-gray-400">Equipo Disponible (Ctrl+Clic para varios)</label><select id="equipment-select" multiple class="w-full h-40 bg-gray-700 border border-gray-600 rounded-md p-2 mt-1"></select></div>
+                        <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg">Añadir Seleccionados</button>
+                        <button type="button" id="create-and-add-btn" class="w-full bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-4 rounded-lg mt-2">+ Crear y Añadir Equipo Faltante</button>
+                    </form>
+                </div></div>
+            </div>;
+        
+        const categorySelect = contentArea.querySelector('#category-select');
+        const equipmentSelect = contentArea.querySelector('#equipment-select');
+
+        const updateEquipmentList = () => {
+            const selectedCategory = categorySelect.value;
+            const pickupDate = contentArea.querySelector('#project-pickup-datetime').value;
+            const returnDate = contentArea.querySelector('#project-return-datetime').value;
+
+            if (!pickupDate || !returnDate) {
+                equipmentSelect.innerHTML = <option disabled>Ingrese fechas de logística</option>;
+                return;
+            }
+
+            const filteredInventory = selectedCategory === 'Todas'
+                ? state.inventory
+                : state.inventory.filter(item => item.category === selectedCategory);
+            
+            let availableOptionsHtml = filteredInventory.map(item => {
+                const availability = getEquipmentAvailability(item.id, pickupDate, returnDate, project.id);
+                return <option value="${item.id}">${item.name} (Disp: ${availability})</option>;
+            }).join('');
+            
+            equipmentSelect.innerHTML = availableOptionsHtml || <option disabled>No hay equipos disponibles</option>;
+        };
+        
+        categorySelect.addEventListener('change', updateEquipmentList);
+        updateEquipmentList(); // Initial population
+
+        contentArea.querySelector('#export-csv-btn').addEventListener('click', () => exportProjectToCSV(projectId));
+        contentArea.querySelector('#delete-project-btn').addEventListener('click', () => deleteProject(projectId));
+        contentArea.querySelector('.status-select').addEventListener('change', (e) => changeProjectStatus(projectId, e.target.value));
+        contentArea.querySelector('#add-equipment-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const selectedIds = [...equipmentSelect.options].filter(o => o.selected).map(o => o.value);
+            if (selectedIds.length > 0) addMultipleEquipmentToProject(projectId, selectedIds);
+        });
+        contentArea.querySelector('#create-and-add-btn').addEventListener('click', () => showAddInventoryItemModal(projectId));
+        contentArea.querySelectorAll('.remove-equipment-btn').forEach(btn => btn.addEventListener('click', (e) => removeEquipmentFromProject(projectId, e.currentTarget.dataset.lineId)));
+        contentArea.querySelectorAll('input[data-line-id]').forEach(input => {
+            input.addEventListener('change', (e) => {
+                const field = e.target.classList.contains('equipment-name-input') ? 'name'
+                            : e.target.classList.contains('equipment-category-input') ? 'category'
+                            : e.target.classList.contains('equipment-quantity-input') ? 'quantity'
+                            : e.target.classList.contains('equipment-jornadas-input') ? 'jornadas'
+                            : e.target.classList.contains('equipment-price-input') ? 'pricePerDay'
+                            : 'notes';
+                const value = (field === 'quantity' || field === 'pricePerDay' || field === 'jornadas') ? parseFloat(e.target.value) : e.target.value;
+                if (!isNaN(value) || typeof value === 'string') {
+                    updateProjectEquipmentDetail(projectId, e.target.dataset.lineId, field, value);
+                } else {
+                    render(); // Revert if invalid value
+                }
+            });
+        });
+        contentArea.querySelector('#project-start-date').addEventListener('change', () => updateProjectDates(projectId));
+        contentArea.querySelector('#project-end-date').addEventListener('change', () => updateProjectDates(projectId));
+        contentArea.querySelector('#project-pickup-datetime').addEventListener('change', () => updateProjectDates(projectId));
+        contentArea.querySelector('#project-return-datetime').addEventListener('change', () => updateProjectDates(projectId));
+
+        // Bulk Actions Logic
+        const bulkActionsBar = contentArea.querySelector('#bulk-actions-bar');
+        const selectionCountSpan = contentArea.querySelector('#selection-count');
+        const selectAllCheckbox = contentArea.querySelector('#select-all-checkbox');
+        const itemCheckboxes = contentArea.querySelectorAll('.equipment-checkbox');
+
+        const updateBulkActionsBar = () => {
+            const selectedCount = currentSelection.size;
+            const totalCount = itemCheckboxes.length;
+            if (selectedCount > 0) {
+                bulkActionsBar.classList.remove('hidden');
+                selectionCountSpan.textContent = ${selectedCount} item(s) seleccionado(s);
+            } else {
+                bulkActionsBar.classList.add('hidden');
+            }
+            if (totalCount > 0) {
+                if (selectedCount === totalCount) {
+                    selectAllCheckbox.checked = true;
+                    selectAllCheckbox.indeterminate = false;
+                } else if (selectedCount === 0) {
+                    selectAllCheckbox.checked = false;
+                    selectAllCheckbox.indeterminate = false;
+                } else {
+                    selectAllCheckbox.checked = false;
+                    selectAllCheckbox.indeterminate = true;
+                }
+            }
+        };
+
+        selectAllCheckbox.addEventListener('change', (e) => {
+            if (e.target.checked) {
+                itemCheckboxes.forEach(cb => currentSelection.add(cb.dataset.lineId));
+            } else {
+                currentSelection.clear();
+            }
+            render(); // Re-render to show checked state correctly
+        });
+
+        itemCheckboxes.forEach(cb => cb.addEventListener('change', (e) => {
+            const lineId = e.target.dataset.lineId;
+            if (e.target.checked) {
+                currentSelection.add(lineId);
+            } else {
+                currentSelection.delete(lineId);
+            }
+            updateBulkActionsBar();
+        }));
+        
+        contentArea.querySelector('#bulk-apply-btn').addEventListener('click', () => {
+            const selectedIds = Array.from(currentSelection);
+            const newQuantity = contentArea.querySelector('#bulk-quantity').value;
+            const newJornadas = contentArea.querySelector('#bulk-jornadas').value;
+            bulkUpdateProjectEquipment(projectId, selectedIds, newQuantity, newJornadas);
+        });
+        
+        updateBulkActionsBar();
+    }
+
+    // --- MODAL & UI FUNCTIONS ---
+    const modalBackdrop = document.getElementById('modal-backdrop');
+    function showModal(modalElement) { modalBackdrop.style.display = 'block'; modalElement.style.display = 'block'; }
+    function hideAllModals() { modalBackdrop.style.display = 'none'; document.querySelectorAll('.modal').forEach(m => m.style.display = 'none'); }
+    modalBackdrop.addEventListener('click', hideAllModals);
+
+    function showAddProjectModal() {
+        const modal = document.getElementById('add-project-modal');
+        modal.innerHTML = <form id="add-project-form" class="p-6">
+            <h2 class="text-2xl font-bold mb-4">Añadir Nuevo Proyecto</h2>
+            <div class="space-y-4">
+                <div><label for="projectName" class="block text-sm font-medium text-gray-400">Nombre del Proyecto</label><input type="text" id="projectName" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 mt-1" required></div>
+                <div><label for="clientName" class="block text-sm font-medium text-gray-400">Cliente</label><input type="text" id="clientName" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 mt-1" required></div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div><label for="startDate" class="block text-sm font-medium text-gray-400">Inicio Producción</label><input type="date" id="startDate" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 mt-1" required></div>
+                    <div><label for="endDate" class="block text-sm font-medium text-gray-400">Fin Producción</label><input type="date" id="endDate" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 mt-1" required></div>
+                    <div><label for="pickupDateTime" class="block text-sm font-medium text-gray-400">Retiro</label><input type="datetime-local" id="pickupDateTime" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 mt-1" required></div>
+                    <div><label for="returnDateTime" class="block text-sm font-medium text-gray-400">Devolución</label><input type="datetime-local" id="returnDateTime" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 mt-1" required></div>
+                </div>
+            </div>
+            <div class="mt-6 flex justify-end space-x-4"><button type="button" class="cancel-btn px-4 py-2 rounded-md text-gray-300 hover:bg-gray-700">Cancelar</button><button type="submit" class="px-4 py-2 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white font-bold">Crear Proyecto</button></div>
+        </form>;
+        showModal(modal);
+        modal.querySelector('.cancel-btn').addEventListener('click', hideAllModals);
+        modal.querySelector('#add-project-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const newProjectRef = await addDoc(projectsCollection, {
+                name: form.projectName.value, client: form.clientName.value,
+                startDate: form.startDate.value, endDate: form.endDate.value,
+                pickupDateTime: form.pickupDateTime.value, returnDateTime: form.returnDateTime.value,
+                status: 'Pendiente', equipment: []
+            });
+            hideAllModals();
+            openProjectTab(newProjectRef.id, form.projectName.value);
+        });
+    }
+    
+    function showAddInventoryItemModal(projectIdToAddTo = null) {
+        const modal = document.getElementById('add-inventory-modal');
+        modal.innerHTML = <form id="add-inventory-form" class="p-6">
+            <h2 class="text-2xl font-bold mb-4">Añadir Equipo al Inventario</h2>
+            <div class="space-y-4">
+                <div><label for="itemName" class="block text-sm font-medium text-gray-400">Nombre del Equipo</label><input type="text" id="itemName" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 mt-1" required></div>
+                <div><label for="itemCategory" class="block text-sm font-medium text-gray-400">Categoría</label><input type="text" id="itemCategory" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 mt-1" required></div>
+                <div><label for="itemType" class="block text-sm font-medium text-gray-400">Tipo de Equipo</label>
+                    <select id="itemType" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 mt-1">
+                        <option value="bulto">Por Bulto</option>
+                        <option value="serie">Por Número de Serie</option>
+                    </select>
+                </div>
+                <div id="bulto-fields">
+                    <label for="itemQuantity" class="block text-sm font-medium text-gray-400">Cantidad Total</label>
+                    <input type="number" id="itemQuantity" min="0" value="1" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 mt-1">
+                </div>
+                <div id="serie-fields" class="hidden">
+                    <label class="block text-sm font-medium text-gray-400">Números de Serie</label>
+                    <div class="flex space-x-2"><input type="text" id="serial-input" class="w-full bg-gray-700 border-gray-600 rounded-md p-2"><button type="button" id="add-serial-btn" class="bg-indigo-600 px-3 rounded-md">Añadir</button></div>
+                    <div id="serial-list" class="mt-2 max-h-32 overflow-y-auto p-2 bg-gray-900 rounded-md"></div>
+                </div>
+                 <div><label for="itemPrice" class="block text-sm font-medium text-gray-400">Precio por Día</label><input type="number" id="itemPrice" min="0" step="0.01" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 mt-1" required></div>
+                 <div><label for="itemProvider" class="block text-sm font-medium text-gray-400">Proveedor (si es subalquiler)</label><input type="text" id="itemProvider" placeholder="Dejar en blanco si es propio" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 mt-1"></div>
+            </div>
+            <div class="mt-6 flex justify-end space-x-4"><button type="button" class="cancel-btn px-4 py-2 rounded-md text-gray-300 hover:bg-gray-700">Cancelar</button><button type="submit" class="px-4 py-2 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white font-bold">Guardar Equipo</button></div>
+        </form>;
+        
+        const itemTypeSelect = modal.querySelector('#itemType');
+        const bultoFields = modal.querySelector('#bulto-fields');
+        const serieFields = modal.querySelector('#serie-fields');
+        const serialInput = modal.querySelector('#serial-input');
+        const addSerialBtn = modal.querySelector('#add-serial-btn');
+        const serialListDiv = modal.querySelector('#serial-list');
+        let serials = [];
+
+        const renderSerials = () => {
+            serialListDiv.innerHTML = serials.map((s, i) => <div class="flex justify-between items-center p-1 bg-gray-700 rounded-md mb-1"><span>${s}</span><button type="button" class="text-red-500 remove-serial-btn" data-index="${i}">&times;</button></div>).join('');
+            modal.querySelectorAll('.remove-serial-btn').forEach(btn => btn.addEventListener('click', (e) => {
+                serials.splice(e.target.dataset.index, 1);
+                renderSerials();
+            }));
+        };
+
+        itemTypeSelect.addEventListener('change', () => {
+            bultoFields.classList.toggle('hidden', itemTypeSelect.value === 'serie');
+            serieFields.classList.toggle('hidden', itemTypeSelect.value === 'bulto');
+        });
+
+        addSerialBtn.addEventListener('click', () => {
+            if (serialInput.value.trim()) {
+                serials.push(serialInput.value.trim());
+                serialInput.value = '';
+                renderSerials();
+            }
+        });
+
+        showModal(modal);
+        modal.querySelector('.cancel-btn').addEventListener('click', hideAllModals);
+        modal.querySelector('#add-inventory-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const project = state.projects.find(p => p.id === projectIdToAddTo);
+            const jornadas = project ? getProjectDurationInDays(project) : 1;
+            const provider = form.itemProvider.value;
+            const type = form.itemType.value;
+
+            const newItemData = {
+                name: form.itemName.value,
+                category: form.itemCategory.value,
+                pricePerDay: parseFloat(form.itemPrice.value),
+                type: type,
+                totalQuantity: type === 'bulto' ? (provider ? 0 : parseInt(form.itemQuantity.value, 10)) : serials.length,
+                units: type === 'serie' ? serials.map(s => ({ serial: s, status: 'available' })) : []
+            };
+
+            const newDocRef = await addDoc(inventoryCollection, newItemData);
+            if (projectIdToAddTo && provider) {
+                const itemForProject = { 
+                    inventoryId: newDocRef.id, 
+                    lineItemId: line_${Date.now()}, 
+                    quantity: 1, 
+                    jornadas: jornadas,
+                    name: newItemData.name,
+                    category: newItemData.category,
+                    pricePerDay: newItemData.pricePerDay,
+                    notes: '',
+                    subrentedInfo: { provider: provider, quantity: 1 }
+                };
+                await addSingleEquipmentToProject(projectIdToAddTo, itemForProject);
+            }
+            hideAllModals();
+        });
+    }
+
+    function showConfirmModal(message, onConfirm, onCancel = () => {}, hasInput = false) {
+        const modal = document.getElementById('confirm-modal');
+        const inputHtml = hasInput ? <input type="text" id="confirm-input" placeholder="Nombre del Proveedor" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 mt-1 mb-4"> : '';
+        modal.innerHTML = <div class="p-6"><p class="text-lg mb-4">${message}</p>${inputHtml}<div class="flex justify-end space-x-4"><button id="confirm-cancel" class="px-4 py-2 rounded-md text-gray-300 hover:bg-gray-700">Cancelar</button><button id="confirm-ok" class="px-4 py-2 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white font-bold">Confirmar</button></div></div>;
+        showModal(modal);
+        modal.querySelector('#confirm-cancel').addEventListener('click', () => { onCancel(); hideAllModals(); });
+        modal.querySelector('#confirm-ok').addEventListener('click', () => { 
+            const inputValue = hasInput ? modal.querySelector('#confirm-input').value : null;
+            onConfirm(inputValue); 
+            hideAllModals(); 
+        });
+    }
+
+    // --- TAB MANAGEMENT ---
+    function openProjectTab(projectId, projectName) {
+        const tabId = project_${projectId};
+        if (!state.openTabs.some(tab => tab.id === tabId)) {
+            state.openTabs.push({ id: tabId, type: 'project-detail', projectId: projectId, title: projectName });
+        }
+        state.activeTabId = tabId;
+        render();
+    }
+
+    function closeTab(tabId, tabIndex) {
+        if (state.activeTabId === tabId) {
+            state.activeTabId = state.openTabs[tabIndex - 1]?.id || 'projects';
+        }
+        state.openTabs = state.openTabs.filter(tab => tab.id !== tabId);
+        delete state.selectedLineItems[project_${tabId.split('_')[1]}]; // Clean up selection state
+        render();
+    }
+
+    // --- ACTIONS (DATABASE INTERACTIONS) ---
+    async function deleteProject(projectId) {
+        showConfirmModal('¿Estás seguro de que quieres eliminar este proyecto?', async () => {
+            const tabIdToDelete = project_${projectId};
+            const tabIndex = state.openTabs.findIndex(t => t.id === tabIdToDelete);
+            await deleteDoc(doc(db, artifacts/${appId}/public/data/projects, projectId));
+            closeTab(tabIdToDelete, tabIndex);
+        });
+    }
+    
+    async function changeProjectStatus(projectId, newStatus) {
+        const projectRef = doc(db, artifacts/${appId}/public/data/projects, projectId);
+        await updateDoc(projectRef, { status: newStatus });
+    }
+
+    async function addSingleEquipmentToProject(projectId, itemData) {
+        const project = state.projects.find(p => p.id === projectId);
+        if (!project) return;
+        const newEquipmentList = [...(project.equipment || []), itemData];
+        const projectRef = doc(db, artifacts/${appId}/public/data/projects, projectId);
+        await updateDoc(projectRef, { equipment: newEquipmentList });
+    }
+
+    async function addMultipleEquipmentToProject(projectId, equipmentIds) {
+        const project = state.projects.find(p => p.id === projectId);
+        if (!project) return;
+        const jornadas = getProjectDurationInDays(project);
+        const newItems = equipmentIds.map((id, index) => {
+            const masterItem = state.inventory.find(inv => inv.id === id);
+            return {
+                lineItemId: line_${Date.now()}_${index},
+                inventoryId: masterItem.id,
+                name: masterItem.name,
+                category: masterItem.category,
+                pricePerDay: masterItem.pricePerDay,
+                quantity: 1,
+                jornadas: jornadas,
+                notes: '',
+                subrentedInfo: null
+            };
+        });
+        const newEquipmentList = [...(project.equipment || []), ...newItems];
+        const projectRef = doc(db, artifacts/${appId}/public/data/projects, projectId);
+        await updateDoc(projectRef, { equipment: newEquipmentList });
+    }
+
+    async function removeEquipmentFromProject(projectId, lineItemId) {
+        const project = state.projects.find(p => p.id === projectId);
+        if(!project) return;
+        const newEquipmentList = (project.equipment || []).filter(e => e.lineItemId !== lineItemId);
+        const projectRef = doc(db, artifacts/${appId}/public/data/projects, projectId);
+        await updateDoc(projectRef, { equipment: newEquipmentList });
+    }
+    
+    async function updateProjectEquipmentDetail(projectId, lineItemId, field, value) {
+        const project = state.projects.find(p => p.id === projectId);
+        if(!project) return;
+
+        let newEquipmentList = [...(project.equipment || [])];
+        const itemIndex = newEquipmentList.findIndex(item => item.lineItemId === lineItemId);
+        if (itemIndex === -1) return;
+
+        const currentItem = newEquipmentList[itemIndex];
+
+        if (field === 'quantity') {
+            const newQuantity = parseInt(value, 10);
+            if (isNaN(newQuantity) || newQuantity < 1) { render(); return; }
+
+            const availability = getEquipmentAvailability(currentItem.inventoryId, project.pickupDateTime, project.returnDateTime, projectId);
+
+            if (newQuantity > availability) {
+                const shortfall = newQuantity - availability;
+                showConfirmModal(
+                    Solo tenés ${availability} unidades disponibles. Faltan ${shortfall}. ¿Querés agregarlas como subalquiler?,
+                    async (provider) => { // onConfirm
+                        if (!provider) {
+                            showConfirmModal("Se requiere un proveedor para el subalquiler.", () => {}, () => { render(); });
+                            return;
+                        }
+                        currentItem.quantity = newQuantity;
+                        currentItem.subrentedInfo = { provider: provider, quantity: shortfall };
+                        const projectRef = doc(db, artifacts/${appId}/public/data/projects, projectId);
+                        await updateDoc(projectRef, { equipment: newEquipmentList });
+                    },
+                    () => { render(); }, // onCancel
+                    true // hasInput
+                );
+                return; 
+            } else {
+                currentItem.quantity = newQuantity;
+                currentItem.subrentedInfo = null;
+            }
+        } else {
+            currentItem[field] = value;
+        }
+        
+        const projectRef = doc(db, artifacts/${appId}/public/data/projects, projectId);
+        await updateDoc(projectRef, { equipment: newEquipmentList });
+    }
+    
+    async function bulkUpdateProjectEquipment(projectId, selectedLineIds, newQuantity, newJornadas) {
+        const project = state.projects.find(p => p.id === projectId);
+        if(!project) return;
+        
+        const newEquipmentList = (project.equipment || []).map(item => {
+            if (selectedLineIds.includes(item.lineItemId)) {
+                const updatedItem = { ...item };
+                if (newQuantity) updatedItem.quantity = parseInt(newQuantity, 10);
+                if (newJornadas) updatedItem.jornadas = parseInt(newJornadas, 10);
+                // Note: Bulk update does not handle subrental logic for simplicity.
+                return updatedItem;
+            }
+            return item;
+        });
+        
+        const projectRef = doc(db, artifacts/${appId}/public/data/projects, projectId);
+        await updateDoc(projectRef, { equipment: newEquipmentList });
+    }
+
+    async function updateProjectDates(projectId) {
+        const projectRef = doc(db, artifacts/${appId}/public/data/projects, projectId);
+        await updateDoc(projectRef, { 
+            startDate: contentArea.querySelector('#project-start-date').value,
+            endDate: contentArea.querySelector('#project-end-date').value,
+            pickupDateTime: contentArea.querySelector('#project-pickup-datetime').value,
+            returnDateTime: contentArea.querySelector('#project-return-datetime').value,
+        });
+    }
+
+    async function handleClearInventory() {
+        showConfirmModal('¿Estás seguro de que quieres vaciar TODO el inventario?', async () => {
+            const querySnapshot = await getDocs(inventoryCollection);
+            const batch = writeBatch(db);
+            querySnapshot.docs.forEach(d => batch.delete(d.ref));
+            await batch.commit();
+        });
+    }
+    
+    // --- CSV & NAVIGATION LOGIC ---
+    document.getElementById('nav-projects').addEventListener('click', (e) => { e.preventDefault(); state.activeTabId = 'projects'; render(); });
+    document.getElementById('nav-inventory').addEventListener('click', (e) => { e.preventDefault(); state.activeTabId = 'inventory'; render(); });
+    
+    function parseCSV(text) {
+        const newInventory = [];
+        const lines = text.split(/\r\n|\n/).filter(line => line.trim() !== '');
+        if (lines.length < 2) throw new Error("El archivo CSV está vacío o solo tiene encabezado.");
+        const headers = lines[0].split(',').map(h => h.trim());
+        const required = ['name', 'category', 'pricePerDay'];
+        if (!required.every(h => headers.includes(h))) throw new Error(El CSV debe tener los encabezados: name, category, pricePerDay);
+        
+        for (let i = 1; i < lines.length; i++) {
+            const data = lines[i].split(',');
+            const row = headers.reduce((obj, header, index) => {
+                obj[header] = data[index]?.trim() || '';
+                return obj;
+            }, {});
+
+            const item = {
+                name: row.name,
+                category: row.category,
+                pricePerDay: parseFloat(row.pricePerDay),
+                type: row.type === 'serie' ? 'serie' : 'bulto',
+                totalQuantity: row.type === 'serie' ? (row.serials?.split(';').length || 0) : (parseInt(row.totalQuantity, 10) || 0),
+                units: row.type === 'serie' ? (row.serials?.split(';').map(s => ({ serial: s, status: 'available' })) || []) : []
+            };
+            if (!item.name || !item.category || isNaN(item.pricePerDay)) {
+                console.warn(Saltando línea ${i+1} por datos inválidos.);
+                continue;
+            }
+            newInventory.push(item);
+        }
+        return newInventory;
+    }
+
+    document.getElementById('csv-file-input').addEventListener('change', (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const newInventory = parseCSV(e.target.result);
+                showConfirmModal(Se encontraron ${newInventory.length} items. ¿Quieres reemplazar tu inventario actual?, async () => {
+                    loadingOverlay.style.display = 'flex';
+                    const querySnapshot = await getDocs(inventoryCollection);
+                    const batch = writeBatch(db);
+                    querySnapshot.docs.forEach(d => batch.delete(d.ref));
+                    newInventory.forEach(item => batch.set(doc(inventoryCollection), item));
+                    await batch.commit();
+                    loadingOverlay.style.display = 'none';
+                });
+            } catch (error) {
+                showConfirmModal('Error al procesar el archivo CSV: ' + error.message, () => {});
+            } finally {
+                event.target.value = '';
+            }
+        };
+        reader.readAsText(file);
+    });
+    
+    function exportProjectToCSV(projectId) {
+        const project = state.projects.find(p => p.id === projectId);
+        if (!project) return;
+        let csvContent = "data:text/csv;charset=utf-8,";
+        csvContent += "TIPO,VALOR\r\n";
+        csvContent += PROYECTO,"${project.name}"\r\nCLIENTE,"${project.client}"\r\n;
+        csvContent += INICIO_PRODUCCION,${project.startDate}\r\nFIN_PRODUCCION,${project.endDate}\r\n;
+        csvContent += RETIRO,${project.pickupDateTime}\r\nDEVOLUCION,${project.returnDateTime}\r\n\r\n;
+        csvContent += "EQUIPO,CATEGORIA,CANTIDAD,JORNADAS,PRECIO_POR_DIA,SUBTOTAL,SUBALQUILADO,PROVEEDOR,NOTAS\r\n";
+        (project.equipment || []).forEach(eq => {
+            const subtotal = eq.pricePerDay * eq.quantity * eq.jornadas;
+            const subrentedQty = eq.subrentedInfo?.quantity || 0;
+            const provider = eq.subrentedInfo?.provider || '';
+            const notes = eq.notes || '';
+            csvContent += "${eq.name}","${eq.category}",${eq.quantity},${eq.jornadas},${eq.pricePerDay},${subtotal},${subrentedQty},"${provider}","${notes}"\r\n;
+        });
+        const link = document.createElement("a");
+        link.setAttribute("href", encodeURI(csvContent));
+        link.setAttribute("download", reporte_${project.name.replace(/\s+/g, '_')}.csv);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+
+    // --- START THE APP ---
+    initializeAppAndAuth();
+</script>
+</body>
+</html>
