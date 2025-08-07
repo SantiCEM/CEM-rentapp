@@ -141,26 +141,50 @@
             }
         } catch (error) {
             console.error("Firebase Initialization Error:", error);
-            loadingOverlay.innerHTML = <div class="text-red-500">Error de Conexión</div>;
+            loadingOverlay.innerHTML = `<div class="text-red-500">Error de Conexión</div>`;
         }
     }
 
     function setupFirestoreListeners() {
         if (!state.isAuthReady) return;
         
-        projectsCollection = collection(db, artifacts/${appId}/public/data/projects);
-        inventoryCollection = collection(db, artifacts/${appId}/public/data/inventory);
+        projectsCollection = collection(db, `artifacts/${appId}/public/data/projects`);
+        inventoryCollection = collection(db, `artifacts/${appId}/public/data/inventory`);
 
         if (unsubscribeProjects) unsubscribeProjects();
         unsubscribeProjects = onSnapshot(query(projectsCollection), (snapshot) => {
-            state.projects = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            render();
+            snapshot.docChanges().forEach((change) => {
+                const projectData = { id: change.doc.id, ...change.doc.data() };
+                if (change.type === "added") {
+                    state.projects.push(projectData);
+                }
+                if (change.type === "modified") {
+                    const index = state.projects.findIndex(p => p.id === projectData.id);
+                    if (index > -1) state.projects[index] = projectData;
+                }
+                if (change.type === "removed") {
+                    state.projects = state.projects.filter(p => p.id !== projectData.id);
+                }
+            });
+            renderCurrentView();
         }, (error) => console.error("Error listening to projects:", error));
 
         if (unsubscribeInventory) unsubscribeInventory();
         unsubscribeInventory = onSnapshot(query(inventoryCollection), (snapshot) => {
-            state.inventory = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            render();
+            snapshot.docChanges().forEach((change) => {
+                const invData = { id: change.doc.id, ...change.doc.data() };
+                if (change.type === "added") {
+                    state.inventory.push(invData);
+                }
+                if (change.type === "modified") {
+                    const index = state.inventory.findIndex(i => i.id === invData.id);
+                    if (index > -1) state.inventory[index] = invData;
+                }
+                if (change.type === "removed") {
+                    state.inventory = state.inventory.filter(i => i.id !== invData.id);
+                }
+            });
+            renderCurrentView();
         }, (error) => console.error("Error listening to inventory:", error));
         
         loadingOverlay.style.display = 'none';
@@ -169,6 +193,14 @@
     // --- UTILITY & HELPER FUNCTIONS ---
     const getStatusColor = (status) => ({'Confirmado':'bg-green-500','En Proceso':'bg-yellow-500','Pendiente':'bg-blue-500','Finalizado':'bg-gray-500'})[status] || 'bg-gray-400';
     const formatCurrency = (amount) => new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(amount);
+    
+    let debounceTimer;
+    const debounce = (func, delay) => {
+        return function(...args) {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => func.apply(this, args), delay);
+        };
+    };
 
     function calculateProjectValue(project) {
         if (!project.equipment) return 0;
@@ -222,8 +254,13 @@
 
         renderTabBar();
         renderHeaderButtons();
-        
+        renderCurrentView();
+    }
+    
+    function renderCurrentView() {
         const currentActiveTab = state.openTabs.find(t => t.id === state.activeTabId);
+        if (!currentActiveTab) return;
+        
         mainTitle.innerText = currentActiveTab.title;
         
         switch (currentActiveTab.type) {
@@ -244,14 +281,14 @@
         state.openTabs.forEach((tab, index) => {
             const isActive = tab.id === state.activeTabId;
             const tabEl = document.createElement('div');
-            tabEl.className = flex items-center px-4 py-2 cursor-pointer border-b-2 whitespace-nowrap ${isActive ? 'bg-gray-900 border-indigo-500 text-white' : 'border-transparent text-gray-400 hover:bg-gray-700'};
+            tabEl.className = `flex items-center px-4 py-2 cursor-pointer border-b-2 whitespace-nowrap ${isActive ? 'bg-gray-900 border-indigo-500 text-white' : 'border-transparent text-gray-400 hover:bg-gray-700'}`;
             tabEl.dataset.tabId = tab.id;
             
             let iconClass = 'fa-tasks';
             if (tab.type === 'inventory') iconClass = 'fa-boxes-stacked';
             if (tab.type === 'project-detail') iconClass = 'fa-folder';
 
-            tabEl.innerHTML = <i class="fas ${iconClass} mr-2"></i><span>${tab.title}</span>;
+            tabEl.innerHTML = `<i class="fas ${iconClass} mr-2"></i><span>${tab.title}</span>`;
             
             if (tab.type === 'project-detail') {
                 const closeBtn = document.createElement('button');
@@ -278,14 +315,14 @@
         if (!activeTab) return;
 
         if (activeTab.type === 'projects') {
-            headerButtons.innerHTML = <button id="add-project-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg flex items-center"><i class="fas fa-plus mr-2"></i> Añadir Proyecto</button>;
+            headerButtons.innerHTML = `<button id="add-project-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg flex items-center"><i class="fas fa-plus mr-2"></i> Añadir Proyecto</button>`;
             headerButtons.querySelector('#add-project-btn').addEventListener('click', showAddProjectModal);
         } else if (activeTab.type === 'inventory') {
-            headerButtons.innerHTML = <div class="flex space-x-2 md:space-x-4">
+            headerButtons.innerHTML = `<div class="flex space-x-2 md:space-x-4">
                 <button id="add-inventory-item-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg flex items-center"><i class="fas fa-plus mr-2"></i> Añadir Equipo</button>
                 <button id="import-csv-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg flex items-center"><i class="fas fa-file-import mr-2"></i> Importar</button>
                 <button id="clear-inventory-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg flex items-center"><i class="fas fa-trash-alt mr-2"></i> Vaciar</button>
-            </div>;
+            </div>`;
             headerButtons.querySelector('#add-inventory-item-btn').addEventListener('click', showAddInventoryItemModal);
             headerButtons.querySelector('#import-csv-btn').addEventListener('click', () => document.getElementById('csv-file-input').click());
             headerButtons.querySelector('#clear-inventory-btn').addEventListener('click', handleClearInventory);
@@ -319,7 +356,7 @@
             }
         });
 
-        let controlsHtml = 
+        let controlsHtml = `
             <div class="bg-gray-800 p-4 rounded-lg mb-4">
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div class="md:col-span-1"><div class="relative"><span class="absolute inset-y-0 left-0 flex items-center pl-3"><i class="fas fa-search text-gray-500"></i></span><input type="text" id="project-search-input" placeholder="Buscar por nombre o cliente..." class="w-full bg-gray-700 border border-gray-600 rounded-md py-2 pl-10 pr-4 text-white focus:ring-indigo-500 focus:border-indigo-500" value="${state.projectSearchTerm}"></div></div>
@@ -334,21 +371,25 @@
                         </select>
                     </div>
                 </div>
-            </div>;
-        let tableHtml = <div class="bg-gray-800 rounded-lg shadow"><table class="w-full text-left">
+            </div>`;
+        let tableHtml = `<div class="bg-gray-800 rounded-lg shadow"><table class="w-full text-left">
             <thead class="bg-gray-700 text-gray-400 uppercase text-sm"><tr><th class="p-4"></th><th class="p-4">Nombre</th><th class="p-4">Cliente</th><th class="p-4">Fechas de Producción</th><th class="p-4">Estado</th><th class="p-4">Valor</th></tr></thead>
-            <tbody class="divide-y divide-gray-700">;
+            <tbody class="divide-y divide-gray-700">`;
         if (filteredProjects.length === 0) {
-            tableHtml += <tr><td colspan="6" class="text-center p-8 text-gray-500">No se encontraron proyectos con los filtros actuales.</td></tr>;
+            tableHtml += `<tr><td colspan="6" class="text-center p-8 text-gray-500">No se encontraron proyectos con los filtros actuales.</td></tr>`;
         } else {
             filteredProjects.forEach(p => {
-                tableHtml += <tr class="hover:bg-gray-700 cursor-pointer project-row" data-project-id="${p.id}" data-project-name="${p.name}"><td class="p-4"><span class="status-dot ${getStatusColor(p.status)}"></span></td><td class="p-4 font-medium text-white">${p.name}</td><td class="p-4">${p.client}</td><td class="p-4">${p.startDate || 'N/A'} al ${p.endDate || 'N/A'}</td><td class="p-4"><span class="px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(p.status)} text-white">${p.status}</span></td><td class="p-4 font-medium text-white">${formatCurrency(calculateProjectValue(p))}</td></tr>;
+                tableHtml += `<tr class="hover:bg-gray-700 cursor-pointer project-row" data-project-id="${p.id}" data-project-name="${p.name}"><td class="p-4"><span class="status-dot ${getStatusColor(p.status)}"></span></td><td class="p-4 font-medium text-white">${p.name}</td><td class="p-4">${p.client}</td><td class="p-4">${p.startDate || 'N/A'} al ${p.endDate || 'N/A'}</td><td class="p-4"><span class="px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(p.status)} text-white">${p.status}</span></td><td class="p-4 font-medium text-white">${formatCurrency(calculateProjectValue(p))}</td></tr>`;
             });
         }
-        tableHtml += </tbody></table></div>;
+        tableHtml += `</tbody></table></div>`;
         contentArea.innerHTML = controlsHtml + tableHtml;
 
-        contentArea.querySelector('#project-search-input').addEventListener('input', (e) => { state.projectSearchTerm = e.target.value; render(); });
+        const debouncedRender = debounce(() => render(), 300);
+        contentArea.querySelector('#project-search-input').addEventListener('input', (e) => { 
+            state.projectSearchTerm = e.target.value; 
+            debouncedRender();
+        });
         contentArea.querySelector('#project-date-start-input').addEventListener('change', (e) => { state.projectDateFilterStart = e.target.value; render(); });
         contentArea.querySelector('#project-date-end-input').addEventListener('change', (e) => { state.projectDateFilterEnd = e.target.value; render(); });
         contentArea.querySelector('#project-sort-select').addEventListener('change', (e) => { state.projectSortOrder = e.target.value; render(); });
@@ -363,17 +404,17 @@
     }
 
     function renderInventory() {
-        let html = <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">;
+        let html = `<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">`;
         if (state.inventory.length === 0) {
-            html = <div class="col-span-full text-center p-8 text-gray-500">El inventario está vacío. Añade un equipo o importa un archivo CSV para empezar.</div>;
+            html = `<div class="col-span-full text-center p-8 text-gray-500">El inventario está vacío. Añade un equipo o importa un archivo CSV para empezar.</div>`;
         } else {
             state.inventory.forEach(item => {
                 const count = item.type === 'serie' ? (item.units?.length || 0) : item.totalQuantity;
                 const typeLabel = item.type === 'serie' ? 'Serializado' : 'Bulto';
-                html += <div class="bg-gray-800 rounded-lg shadow p-4 flex flex-col"><h3 class="text-lg font-bold text-white">${item.name}</h3><p class="text-sm text-gray-400">${item.category}</p><div class="mt-4 pt-4 border-t border-gray-700 flex-1 flex flex-col justify-end"><p class="text-sm">Precio/día: <span class="font-semibold text-white">${formatCurrency(item.pricePerDay)}</span></p><p class="text-sm">Cantidad: <span class="font-semibold text-white">${count} (${typeLabel})</span></p></div></div>;
+                html += `<div class="bg-gray-800 rounded-lg shadow p-4 flex flex-col"><h3 class="text-lg font-bold text-white">${item.name}</h3><p class="text-sm text-gray-400">${item.category}</p><div class="mt-4 pt-4 border-t border-gray-700 flex-1 flex flex-col justify-end"><p class="text-sm">Precio/día: <span class="font-semibold text-white">${formatCurrency(item.pricePerDay)}</span></p><p class="text-sm">Cantidad: <span class="font-semibold text-white">${count} (${typeLabel})</span></p></div></div>`;
             });
         }
-        html += </div>;
+        html += `</div>`;
         contentArea.innerHTML = html;
     }
 
@@ -385,15 +426,15 @@
         
         const project = state.projects.find(p => p.id === projectId);
         if (!project) {
-            contentArea.innerHTML = <p class="text-center text-gray-500">Proyecto no encontrado o eliminado.</p>;
+            contentArea.innerHTML = `<p class="text-center text-gray-500">Proyecto no encontrado o eliminado.</p>`;
             return;
         }
         const value = calculateProjectValue(project);
         let equipmentHtml = (project.equipment || []).map(eq => {
             const isChecked = currentSelection.has(eq.lineItemId) ? 'checked' : '';
             const subrentedInfo = eq.subrentedInfo;
-            const subrentedText = subrentedInfo ? <span class="text-xs text-amber-400 ml-1" title="Proveedor: ${subrentedInfo.provider}">(S: ${subrentedInfo.quantity})</span> : '';
-            return <tr class="hover:bg-gray-700">
+            const subrentedText = subrentedInfo ? `<span class="text-xs text-amber-400 ml-1" title="Proveedor: ${subrentedInfo.provider}">(S: ${subrentedInfo.quantity})</span>` : '';
+            return `<tr class="hover:bg-gray-700">
                 <td class="p-2"><input type="checkbox" class="equipment-checkbox bg-gray-700 border-gray-600" data-line-id="${eq.lineItemId}" ${isChecked}></td>
                 <td class="p-2"><input type="text" value="${eq.name}" class="w-full bg-gray-700 border border-gray-600 rounded-md p-1 equipment-name-input" data-line-id="${eq.lineItemId}"></td>
                 <td class="p-2"><input type="text" value="${eq.category}" class="w-full bg-gray-700 border border-gray-600 rounded-md p-1 equipment-category-input" data-line-id="${eq.lineItemId}"></td>
@@ -403,13 +444,13 @@
                 <td class="p-2"><input type="text" value="${eq.notes || ''}" placeholder="Nro Serie..." class="w-full bg-gray-700 border border-gray-600 rounded-md p-1 equipment-notes-input" data-line-id="${eq.lineItemId}"></td>
                 <td class="p-2 font-medium text-white">${formatCurrency(eq.pricePerDay * eq.quantity * eq.jornadas)}</td>
                 <td class="p-2 text-right"><button class="text-red-500 hover:text-red-400 remove-equipment-btn" data-line-id="${eq.lineItemId}"><i class="fas fa-trash"></i></button></td>
-            </tr>;
+            </tr>`;
         }).join('');
         
         const categories = ['Todas', ...new Set(state.inventory.map(item => item.category))];
-        let categoryOptionsHtml = categories.map(cat => <option value="${cat}">${cat}</option>).join('');
+        let categoryOptionsHtml = categories.map(cat => `<option value="${cat}">${cat}</option>`).join('');
 
-        contentArea.innerHTML = 
+        contentArea.innerHTML = `
             <div class="bg-gray-800 rounded-lg shadow p-6 mb-6">
                 <div class="flex flex-col md:flex-row justify-between items-start">
                     <div class="w-full md:w-2/3"><h2 class="text-3xl font-bold text-white">${project.name}</h2><p class="text-lg text-gray-400">${project.client}</p><div class="mt-4 space-y-2">
@@ -433,7 +474,7 @@
                         <button type="button" id="create-and-add-btn" class="w-full bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-4 rounded-lg mt-2">+ Crear y Añadir Equipo Faltante</button>
                     </form>
                 </div></div>
-            </div>;
+            </div>`;
         
         const categorySelect = contentArea.querySelector('#category-select');
         const equipmentSelect = contentArea.querySelector('#equipment-select');
@@ -444,7 +485,7 @@
             const returnDate = contentArea.querySelector('#project-return-datetime').value;
 
             if (!pickupDate || !returnDate) {
-                equipmentSelect.innerHTML = <option disabled>Ingrese fechas de logística</option>;
+                equipmentSelect.innerHTML = `<option disabled>Ingrese fechas de logística</option>`;
                 return;
             }
 
@@ -454,10 +495,10 @@
             
             let availableOptionsHtml = filteredInventory.map(item => {
                 const availability = getEquipmentAvailability(item.id, pickupDate, returnDate, project.id);
-                return <option value="${item.id}">${item.name} (Disp: ${availability})</option>;
+                return `<option value="${item.id}">${item.name} (Disp: ${availability})</option>`;
             }).join('');
             
-            equipmentSelect.innerHTML = availableOptionsHtml || <option disabled>No hay equipos disponibles</option>;
+            equipmentSelect.innerHTML = availableOptionsHtml || `<option disabled>No hay equipos disponibles</option>`;
         };
         
         categorySelect.addEventListener('change', updateEquipmentList);
@@ -505,7 +546,7 @@
             const totalCount = itemCheckboxes.length;
             if (selectedCount > 0) {
                 bulkActionsBar.classList.remove('hidden');
-                selectionCountSpan.textContent = ${selectedCount} item(s) seleccionado(s);
+                selectionCountSpan.textContent = `${selectedCount} item(s) seleccionado(s)`;
             } else {
                 bulkActionsBar.classList.add('hidden');
             }
@@ -560,7 +601,7 @@
 
     function showAddProjectModal() {
         const modal = document.getElementById('add-project-modal');
-        modal.innerHTML = <form id="add-project-form" class="p-6">
+        modal.innerHTML = `<form id="add-project-form" class="p-6">
             <h2 class="text-2xl font-bold mb-4">Añadir Nuevo Proyecto</h2>
             <div class="space-y-4">
                 <div><label for="projectName" class="block text-sm font-medium text-gray-400">Nombre del Proyecto</label><input type="text" id="projectName" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 mt-1" required></div>
@@ -573,7 +614,7 @@
                 </div>
             </div>
             <div class="mt-6 flex justify-end space-x-4"><button type="button" class="cancel-btn px-4 py-2 rounded-md text-gray-300 hover:bg-gray-700">Cancelar</button><button type="submit" class="px-4 py-2 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white font-bold">Crear Proyecto</button></div>
-        </form>;
+        </form>`;
         showModal(modal);
         modal.querySelector('.cancel-btn').addEventListener('click', hideAllModals);
         modal.querySelector('#add-project-form').addEventListener('submit', async (e) => {
@@ -592,7 +633,7 @@
     
     function showAddInventoryItemModal(projectIdToAddTo = null) {
         const modal = document.getElementById('add-inventory-modal');
-        modal.innerHTML = <form id="add-inventory-form" class="p-6">
+        modal.innerHTML = `<form id="add-inventory-form" class="p-6">
             <h2 class="text-2xl font-bold mb-4">Añadir Equipo al Inventario</h2>
             <div class="space-y-4">
                 <div><label for="itemName" class="block text-sm font-medium text-gray-400">Nombre del Equipo</label><input type="text" id="itemName" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 mt-1" required></div>
@@ -616,7 +657,7 @@
                  <div><label for="itemProvider" class="block text-sm font-medium text-gray-400">Proveedor (si es subalquiler)</label><input type="text" id="itemProvider" placeholder="Dejar en blanco si es propio" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 mt-1"></div>
             </div>
             <div class="mt-6 flex justify-end space-x-4"><button type="button" class="cancel-btn px-4 py-2 rounded-md text-gray-300 hover:bg-gray-700">Cancelar</button><button type="submit" class="px-4 py-2 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white font-bold">Guardar Equipo</button></div>
-        </form>;
+        </form>`;
         
         const itemTypeSelect = modal.querySelector('#itemType');
         const bultoFields = modal.querySelector('#bulto-fields');
@@ -627,7 +668,7 @@
         let serials = [];
 
         const renderSerials = () => {
-            serialListDiv.innerHTML = serials.map((s, i) => <div class="flex justify-between items-center p-1 bg-gray-700 rounded-md mb-1"><span>${s}</span><button type="button" class="text-red-500 remove-serial-btn" data-index="${i}">&times;</button></div>).join('');
+            serialListDiv.innerHTML = serials.map((s, i) => `<div class="flex justify-between items-center p-1 bg-gray-700 rounded-md mb-1"><span>${s}</span><button type="button" class="text-red-500 remove-serial-btn" data-index="${i}">&times;</button></div>`).join('');
             modal.querySelectorAll('.remove-serial-btn').forEach(btn => btn.addEventListener('click', (e) => {
                 serials.splice(e.target.dataset.index, 1);
                 renderSerials();
@@ -670,7 +711,7 @@
             if (projectIdToAddTo && provider) {
                 const itemForProject = { 
                     inventoryId: newDocRef.id, 
-                    lineItemId: line_${Date.now()}, 
+                    lineItemId: `line_${Date.now()}`, 
                     quantity: 1, 
                     jornadas: jornadas,
                     name: newItemData.name,
@@ -687,8 +728,8 @@
 
     function showConfirmModal(message, onConfirm, onCancel = () => {}, hasInput = false) {
         const modal = document.getElementById('confirm-modal');
-        const inputHtml = hasInput ? <input type="text" id="confirm-input" placeholder="Nombre del Proveedor" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 mt-1 mb-4"> : '';
-        modal.innerHTML = <div class="p-6"><p class="text-lg mb-4">${message}</p>${inputHtml}<div class="flex justify-end space-x-4"><button id="confirm-cancel" class="px-4 py-2 rounded-md text-gray-300 hover:bg-gray-700">Cancelar</button><button id="confirm-ok" class="px-4 py-2 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white font-bold">Confirmar</button></div></div>;
+        const inputHtml = hasInput ? `<input type="text" id="confirm-input" placeholder="Nombre del Proveedor" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 mt-1 mb-4">` : '';
+        modal.innerHTML = `<div class="p-6"><p class="text-lg mb-4">${message}</p>${inputHtml}<div class="flex justify-end space-x-4"><button id="confirm-cancel" class="px-4 py-2 rounded-md text-gray-300 hover:bg-gray-700">Cancelar</button><button id="confirm-ok" class="px-4 py-2 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white font-bold">Confirmar</button></div></div>`;
         showModal(modal);
         modal.querySelector('#confirm-cancel').addEventListener('click', () => { onCancel(); hideAllModals(); });
         modal.querySelector('#confirm-ok').addEventListener('click', () => { 
@@ -700,7 +741,7 @@
 
     // --- TAB MANAGEMENT ---
     function openProjectTab(projectId, projectName) {
-        const tabId = project_${projectId};
+        const tabId = `project_${projectId}`;
         if (!state.openTabs.some(tab => tab.id === tabId)) {
             state.openTabs.push({ id: tabId, type: 'project-detail', projectId: projectId, title: projectName });
         }
@@ -713,22 +754,22 @@
             state.activeTabId = state.openTabs[tabIndex - 1]?.id || 'projects';
         }
         state.openTabs = state.openTabs.filter(tab => tab.id !== tabId);
-        delete state.selectedLineItems[project_${tabId.split('_')[1]}]; // Clean up selection state
+        delete state.selectedLineItems[`project_${tabId.split('_')[1]}`]; // Clean up selection state
         render();
     }
 
     // --- ACTIONS (DATABASE INTERACTIONS) ---
     async function deleteProject(projectId) {
         showConfirmModal('¿Estás seguro de que quieres eliminar este proyecto?', async () => {
-            const tabIdToDelete = project_${projectId};
+            const tabIdToDelete = `project_${projectId}`;
             const tabIndex = state.openTabs.findIndex(t => t.id === tabIdToDelete);
-            await deleteDoc(doc(db, artifacts/${appId}/public/data/projects, projectId));
+            await deleteDoc(doc(db, `artifacts/${appId}/public/data/projects`, projectId));
             closeTab(tabIdToDelete, tabIndex);
         });
     }
     
     async function changeProjectStatus(projectId, newStatus) {
-        const projectRef = doc(db, artifacts/${appId}/public/data/projects, projectId);
+        const projectRef = doc(db, `artifacts/${appId}/public/data/projects`, projectId);
         await updateDoc(projectRef, { status: newStatus });
     }
 
@@ -736,7 +777,7 @@
         const project = state.projects.find(p => p.id === projectId);
         if (!project) return;
         const newEquipmentList = [...(project.equipment || []), itemData];
-        const projectRef = doc(db, artifacts/${appId}/public/data/projects, projectId);
+        const projectRef = doc(db, `artifacts/${appId}/public/data/projects`, projectId);
         await updateDoc(projectRef, { equipment: newEquipmentList });
     }
 
@@ -747,7 +788,7 @@
         const newItems = equipmentIds.map((id, index) => {
             const masterItem = state.inventory.find(inv => inv.id === id);
             return {
-                lineItemId: line_${Date.now()}_${index},
+                lineItemId: `line_${Date.now()}_${index}`,
                 inventoryId: masterItem.id,
                 name: masterItem.name,
                 category: masterItem.category,
@@ -759,7 +800,7 @@
             };
         });
         const newEquipmentList = [...(project.equipment || []), ...newItems];
-        const projectRef = doc(db, artifacts/${appId}/public/data/projects, projectId);
+        const projectRef = doc(db, `artifacts/${appId}/public/data/projects`, projectId);
         await updateDoc(projectRef, { equipment: newEquipmentList });
     }
 
@@ -767,7 +808,7 @@
         const project = state.projects.find(p => p.id === projectId);
         if(!project) return;
         const newEquipmentList = (project.equipment || []).filter(e => e.lineItemId !== lineItemId);
-        const projectRef = doc(db, artifacts/${appId}/public/data/projects, projectId);
+        const projectRef = doc(db, `artifacts/${appId}/public/data/projects`, projectId);
         await updateDoc(projectRef, { equipment: newEquipmentList });
     }
     
@@ -790,7 +831,7 @@
             if (newQuantity > availability) {
                 const shortfall = newQuantity - availability;
                 showConfirmModal(
-                    Solo tenés ${availability} unidades disponibles. Faltan ${shortfall}. ¿Querés agregarlas como subalquiler?,
+                    `Solo tenés ${availability} unidades disponibles. Faltan ${shortfall}. ¿Querés agregarlas como subalquiler?`,
                     async (provider) => { // onConfirm
                         if (!provider) {
                             showConfirmModal("Se requiere un proveedor para el subalquiler.", () => {}, () => { render(); });
@@ -798,7 +839,7 @@
                         }
                         currentItem.quantity = newQuantity;
                         currentItem.subrentedInfo = { provider: provider, quantity: shortfall };
-                        const projectRef = doc(db, artifacts/${appId}/public/data/projects, projectId);
+                        const projectRef = doc(db, `artifacts/${appId}/public/data/projects`, projectId);
                         await updateDoc(projectRef, { equipment: newEquipmentList });
                     },
                     () => { render(); }, // onCancel
@@ -813,7 +854,7 @@
             currentItem[field] = value;
         }
         
-        const projectRef = doc(db, artifacts/${appId}/public/data/projects, projectId);
+        const projectRef = doc(db, `artifacts/${appId}/public/data/projects`, projectId);
         await updateDoc(projectRef, { equipment: newEquipmentList });
     }
     
@@ -832,12 +873,12 @@
             return item;
         });
         
-        const projectRef = doc(db, artifacts/${appId}/public/data/projects, projectId);
+        const projectRef = doc(db, `artifacts/${appId}/public/data/projects`, projectId);
         await updateDoc(projectRef, { equipment: newEquipmentList });
     }
 
     async function updateProjectDates(projectId) {
-        const projectRef = doc(db, artifacts/${appId}/public/data/projects, projectId);
+        const projectRef = doc(db, `artifacts/${appId}/public/data/projects`, projectId);
         await updateDoc(projectRef, { 
             startDate: contentArea.querySelector('#project-start-date').value,
             endDate: contentArea.querySelector('#project-end-date').value,
@@ -865,7 +906,7 @@
         if (lines.length < 2) throw new Error("El archivo CSV está vacío o solo tiene encabezado.");
         const headers = lines[0].split(',').map(h => h.trim());
         const required = ['name', 'category', 'pricePerDay'];
-        if (!required.every(h => headers.includes(h))) throw new Error(El CSV debe tener los encabezados: name, category, pricePerDay);
+        if (!required.every(h => headers.includes(h))) throw new Error(`El CSV debe tener los encabezados: name, category, pricePerDay`);
         
         for (let i = 1; i < lines.length; i++) {
             const data = lines[i].split(',');
@@ -883,7 +924,7 @@
                 units: row.type === 'serie' ? (row.serials?.split(';').map(s => ({ serial: s, status: 'available' })) || []) : []
             };
             if (!item.name || !item.category || isNaN(item.pricePerDay)) {
-                console.warn(Saltando línea ${i+1} por datos inválidos.);
+                console.warn(`Saltando línea ${i+1} por datos inválidos.`);
                 continue;
             }
             newInventory.push(item);
@@ -898,7 +939,7 @@
         reader.onload = (e) => {
             try {
                 const newInventory = parseCSV(e.target.result);
-                showConfirmModal(Se encontraron ${newInventory.length} items. ¿Quieres reemplazar tu inventario actual?, async () => {
+                showConfirmModal(`Se encontraron ${newInventory.length} items. ¿Quieres reemplazar tu inventario actual?`, async () => {
                     loadingOverlay.style.display = 'flex';
                     const querySnapshot = await getDocs(inventoryCollection);
                     const batch = writeBatch(db);
@@ -921,20 +962,20 @@
         if (!project) return;
         let csvContent = "data:text/csv;charset=utf-8,";
         csvContent += "TIPO,VALOR\r\n";
-        csvContent += PROYECTO,"${project.name}"\r\nCLIENTE,"${project.client}"\r\n;
-        csvContent += INICIO_PRODUCCION,${project.startDate}\r\nFIN_PRODUCCION,${project.endDate}\r\n;
-        csvContent += RETIRO,${project.pickupDateTime}\r\nDEVOLUCION,${project.returnDateTime}\r\n\r\n;
+        csvContent += `PROYECTO,"${project.name}"\r\nCLIENTE,"${project.client}"\r\n`;
+        csvContent += `INICIO_PRODUCCION,${project.startDate}\r\nFIN_PRODUCCION,${project.endDate}\r\n`;
+        csvContent += `RETIRO,${project.pickupDateTime}\r\nDEVOLUCION,${project.returnDateTime}\r\n\r\n`;
         csvContent += "EQUIPO,CATEGORIA,CANTIDAD,JORNADAS,PRECIO_POR_DIA,SUBTOTAL,SUBALQUILADO,PROVEEDOR,NOTAS\r\n";
         (project.equipment || []).forEach(eq => {
             const subtotal = eq.pricePerDay * eq.quantity * eq.jornadas;
             const subrentedQty = eq.subrentedInfo?.quantity || 0;
             const provider = eq.subrentedInfo?.provider || '';
             const notes = eq.notes || '';
-            csvContent += "${eq.name}","${eq.category}",${eq.quantity},${eq.jornadas},${eq.pricePerDay},${subtotal},${subrentedQty},"${provider}","${notes}"\r\n;
+            csvContent += `"${eq.name}","${eq.category}",${eq.quantity},${eq.jornadas},${eq.pricePerDay},${subtotal},${subrentedQty},"${provider}","${notes}"\r\n`;
         });
         const link = document.createElement("a");
         link.setAttribute("href", encodeURI(csvContent));
-        link.setAttribute("download", reporte_${project.name.replace(/\s+/g, '_')}.csv);
+        link.setAttribute("download", `reporte_${project.name.replace(/\s+/g, '_')}.csv`);
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
